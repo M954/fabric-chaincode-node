@@ -21,6 +21,8 @@ const Stub = require('./stub.js');
 
 const utils = require('./utils/utils');
 
+var tagg = require('threads_a_gogo');
+
 const _serviceProto = ProtoLoader.load({
     root: path.join(__dirname, './protos'),
     file: 'peer/chaincode_shim.proto'
@@ -258,12 +260,37 @@ class ChaincodeSupportClient {
         if (opts && opts['request-timeout']) {
             this._request_timeout = opts['request-timeout'];
         }
-
+	
+	const numThreads = 40;
+	this.ThreadPool = tagg.createPool(numThreads).all.eval(this.handleMsg);
         this._client = new _serviceProto.ChaincodeSupport(this._endpoint.addr, this._endpoint.creds, this._options);
     }
 
     close() {
         this._stream.end();
+    }
+
+    handleMsg(meg){
+	const self = this;
+	const type = msg.type;
+	if (type !== MSG_TYPE.REGISTERED && type !== MSG_TYPE.READY) {
+	    const loggerPrefix = utils.generateLoggingPrefix(msg.channel_id, msg.txid);
+		
+	    if (type === MSG_TYPE.RESPONSE || type === MSG_TYPE.ERROR) {
+		logger.info('%s Received %s,  handling good or error response', loggerPrefix, msg.type);
+		self.msgQueueHandler.handleMsgResponse(msg);
+	    } else if (type === MSG_TYPE.INIT) {
+		logger.debug('%s Received %s, initializing chaincode', loggerPrefix, msg.type);
+		self.handleInit(msg);
+	    } else if (type === MSG_TYPE.TRANSACTION) {
+		logger.debug('%s Received %s, invoking transaction on chaincode(state:%s)', loggerPrefix, msg.type, state);
+		self.handleTransaction(msg);
+	    } else {
+		logger.error('Received unknown message from the peer. Exiting.'
+		// TODO: Should we really do this ?
+		process.exit(1);
+	    }
+	}
     }
 
     // this is a long-running method that does not return until
@@ -284,27 +311,28 @@ class ChaincodeSupportClient {
             logger.debug('Received chat message from peer: %j, state: %s', msg, state);
 
             if (state === STATES.Ready) {
-                const type = msg.type;
-
-                if (type !== MSG_TYPE.REGISTERED && type !== MSG_TYPE.READY) {
-
-                    const loggerPrefix = utils.generateLoggingPrefix(msg.channel_id, msg.txid);
-
-                    if (type === MSG_TYPE.RESPONSE || type === MSG_TYPE.ERROR) {
-                        logger.debug('%s Received %s,  handling good or error response', loggerPrefix, msg.type);
-                        self.msgQueueHandler.handleMsgResponse(msg);
-                    } else if (type === MSG_TYPE.INIT) {
-                        logger.debug('%s Received %s, initializing chaincode', loggerPrefix, msg.type);
-                        self.handleInit(msg);
-                    } else if (type === MSG_TYPE.TRANSACTION) {
-                        logger.debug('%s Received %s, invoking transaction on chaincode(state:%s)', loggerPrefix, msg.type, state);
-                        self.handleTransaction(msg);
-                    } else {
-                        logger.error('Received unknown message from the peer. Exiting.');
-                        // TODO: Should we really do this ?
-                        process.exit(1);
-                    }
-                }
+		self.threadPool.any.eval('self.handleMsg(msg)');
+//                const type = msg.type;
+//
+//                if (type !== MSG_TYPE.REGISTERED && type !== MSG_TYPE.READY) {
+//
+//                    const loggerPrefix = utils.generateLoggingPrefix(msg.channel_id, msg.txid);
+//
+//                    if (type === MSG_TYPE.RESPONSE || type === MSG_TYPE.ERROR) {
+//                        logger.debug('%s Received %s,  handling good or error response', loggerPrefix, msg.type);
+//                        self.msgQueueHandler.handleMsgResponse(msg);
+//                    } else if (type === MSG_TYPE.INIT) {
+//                        logger.debug('%s Received %s, initializing chaincode', loggerPrefix, msg.type);
+//                        self.handleInit(msg);
+//                    } else if (type === MSG_TYPE.TRANSACTION) {
+//                        logger.debug('%s Received %s, invoking transaction on chaincode(state:%s)', loggerPrefix, msg.type, state);
+//                        self.handleTransaction(msg);
+//                    } else {
+//                        logger.error('Received unknown message from the peer. Exiting.');
+//                        // TODO: Should we really do this ?
+//                        process.exit(1);
+//                    }
+//                }
             }
 
             if (state === STATES.Established) {
